@@ -1,0 +1,1158 @@
+---
+title: "In Document Thesis"
+author: "aaron till"
+date: "3/13/2018"
+output: html_document
+---
+
+# Data Importing
+
+
+
+```{r uploading and transforming MME data}
+MME<-read.csv("Fish Kill Data Updated 3_7_2018 - Fish Kill Investigations Orgion.csv")
+MME <- MME %>%
+  filter(Min.Kill.Size!="Excludable") %>%
+  select(-contains('County'), -contains('Station.Name'), -contains('Cause.Desc'), -contains('Site.Seq.No'), -contains('Fishkill.Inv.Seq.No'), - contains('Location.QA.Comment'), -contains('Activity.Desc'), -contains('Recommended.Action.Desc'), -contains('Fish.Kill.Comment'), -contains('Live.Fish.Desc')) %>%
+  mutate(Month = Investigation.Start.Month) %>%
+  select(-contains('Investigation.Start.Month'))
+
+```
+
+
+```{r uploading TEMP/NHD data and transforming TEMP}
+TEMP<-read.csv("thermal_metrics.csv") %>%
+    select(-contains('ice_on_date'), -contains('ice_off_date'), -contains('gdd_wtr'), -contains('sthermo_depth_mean'), -contains('coef_'), -contains('strat')) 
+
+
+NHD_CONVERSION<-read.csv("NHD_WBIC.csv")
+
+TEMP<- merge(TEMP, NHD_CONVERSION) 
+```
+
+```{r tidying Temp data}
+TEMP_Tidy <- TEMP%>%
+  select(-contains('jas')) %>%
+  gather(key="type", value="temperature", starts_with('mean_surf_'),starts_with('mean_bot_'), starts_with('max_surf_'), starts_with('max_bot_')) %>%
+  separate(type, into=c('metric', 'depth', 'Month'), sep='_')
+  
+  
+TEMP_Tidy$Month <- str_to_title((TEMP_Tidy$Month)) 
+
+
+  
+
+```
+
+
+
+```{r uploading and transforming Wisconsin data and merging with TEMP}
+#filter for wisconsin only
+Wisconsin <- read.csv("Wi_Lakes_Maps .csv")
+Wisconsin <- select(Wisconsin, WBIC, OFFICIAL_NAME, OFFICIAL_SIZE_VALUE, OFFICIAL_MAX_DEPTH_VALUE)
+Wisconsin <- distinct(Wisconsin)
+
+TEMP_W <- merge(TEMP_Tidy, Wisconsin, all = FALSE) # 3072 sites less 
+```
+
+
+
+
+```{r creating fdata}
+
+fdata<-merge(MME,TEMP_Tidy, all = FALSE)# - 98 lakes
+fdata <- distinct(fdata)
+
+```
+
+
+```{r transforming mean and creating restricted fdata}
+
+#fdata$concurrent_mean_surf <- as.numeric(fdata$concurrent_mean_surf)
+
+fdata_restricted <- fdata %>%
+  filter(Year>2003 & Year<2014)
+
+```
+
+
+
+
+```{r creation of bigdata and adding MME and Date}
+
+#3fdata <- fdata %>%
+  #  select(-contains('mean_surf'), -contains('mean_bot'), -contains('max_surf'), -contains('max_bot'))
+
+bigdata <-merge(fdata,TEMP_W, all = TRUE) # + 61 lakes from TEMP_W (so 61 w/ no temp data)
+bigdata$MME <-as.factor(ifelse(is.na(bigdata$Min.Kill.Size), 0, 1))
+bigdata$Date <- make_date(year=bigdata$Year, month = bigdata$Month)
+
+```
+
+```{r creating restricted bigdata}
+
+bigdata_restricted <-bigdata%>%
+  filter(Year>2003& Date < '2014-05-01')
+
+
+bigdata_restricted$zscore_peak_temp <- (bigdata_restricted$peak_temp - ave(bigdata_restricted$peak_temp,bigdata_restricted$site_id)) / sd(bigdata_restricted$peak_temp)
+
+bigdata_restricted<- bigdata_restricted %>%
+  group_by(metric, depth, Month) %>%
+  mutate(zscore_temp = (temperature - ave(temperature, site_id))/ sd(temperature)) 
+```
+
+
+
+```{r functions for accessing bigdata and making zscore}
+
+mean_surf <- function(data) {
+  data %>%
+    filter(metric=='mean', depth=='surf')
+}
+mean_bot <- function(data) {
+  data %>%
+    filter(metric=='mean', depth=='bot')
+}
+max_surf <- function(data) {
+  data %>%
+    filter(metric=='max', depth=='surf')
+}
+max_bot <- function(data) {
+  data %>%
+    filter(metric=='max', depth=='bot')
+}
+```
+
+
+```{r samples}
+set.seed(42)
+sample_W_max_surf <-filter( max_surf(TEMP_W), Year>2003 & Year < 2015 )[sample(1:610236, 20000, replace=FALSE),]
+
+sample_max_surf <- merge(sample_W_max_surf, max_surf(fdata_restricted), all = TRUE)
+sample_max_surf$MME <-as.factor(ifelse(is.na(sample_max_surf$Min.Kill.Size), 0, 1))
+
+
+```
+
+
+
+# Intro
+```{r shape and number of MMEs}
+
+max_surf(bigdata_restricted) %>% 
+  summarise(n_distinct(WBIC))
+
+max_surf(fdata) %>%
+  group_by(WBIC) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = count)) +
+    geom_histogram(position = 'identity', binwidth = 1) +
+    xlab('Number of MMEs') +
+    ylab('Number of Lakes') +
+    theme_tufte()
+
+
+max_surf(fdata_restricted) %>%
+  summarise(n_distinct(WBIC))
+```
+
+```{r Month and year structure - WARNING - data from graphs not thesis clean document}
+plot1<-ggplot(fdata,aes(x=factor(Year), fill=Month)) +
+  stat_count()+
+  #geom_boxplot(color="black",aes(y=peak_temp, group=Year)) +
+  ylab("")+
+  xlab("Year") +
+  ggtitle("Number Of Events Per Year")+              #Peak Temperatures Per Year")+
+  scale_x_discrete()+
+  #guides(fill=FALSE) +
+  theme_tufte()
+plot1
+
+#number of events per month
+fdata$Month = factor(fdata$Investigation.Start.Month, levels=c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Nov", "Dec"))  
+fdata <- filter(fdata, !is.na(Month))
+plot1.1<-ggplot(fdata,aes(x=Month, fill=Month)) +
+  stat_count()+
+  xlab("Month")+
+  ylab("")+
+  ggtitle("Number Of Events Per Month")+
+  scale_x_discrete() +
+  guides(fill=FALSE) +
+  theme_tufte()
+plot1.1
+
+grid.arrange(plot1, plot1.1)
+```
+
+```{r averages for tabel}
+bigdata %>%
+  group_by(MME, depth, metric) %>%
+  summarise(mean = mean(temperature)) %>%
+  head(20)
+
+```
+
+```{r bar chart peak temp}
+mean_surf(bigdata_restricted) %>%
+  group_by(Year, MME) %>%
+  summarise(mean = mean(peak_temp), se = sd(peak_temp)/sqrt(n())) %>%
+  ggplot(aes(x=as.factor(Year), y=mean, fill = MME))+
+    geom_bar(stat='identity', position ="dodge") +
+    geom_errorbar(aes(ymin = mean - se, ymax = mean + se), position = 'dodge') +
+    xlab('Year') +
+    ylab("Peak Temperature (Celsius)")+
+    scale_y_continuous(limits=c(25,35),oob = rescale_none) +
+    theme_tufte()
+```
+
+```{r boxplot max surf and kill type}
+
+ggplot(filter(bigdata_restricted, MME==1), aes(y=zscore_peak_temp, x =Cause.Category.3)) +
+  geom_boxplot()+
+  xlab("Kill Type") +
+  ylab("Z-Score Deviation of Max Monthly Temperature Relative to Lakes' Other Years") +
+  coord_flip()  +
+  scale_x_discrete(position = "top")
+
+```
+
+# summerkill
+
+```{r}
+
+options(scipen=0)
+
+logreg <- glm((Cause.Category.3 == "SUMMERKILL" & !is.na(Cause.Category.3)) ~ temperature, family = 'binomial', data=filter(max_surf(bigdata_restricted), Month == 'Jun' | Month == 'Jul' | Month =='Aug' | Month == 'Sep'))
+summary(logreg)
+
+logreg_summer_sample <- glm((Cause.Category.3 == "SUMMERKILL" & !is.na(Cause.Category.3)) ~ temperature, family = 'binomial', data=filter(sample_mean_surf, Month == 'Jun' | Month == 'Jul' | Month =='Aug' | Month == 'Sep'))
+summary(logreg_summer_sample)
+
+log_plot <- ggplot(filter(sample_mean_surf, Month == 'Jun' | Month == 'Jul' | Month == 'Aug' | Month == 'Sep'), aes(x= temperature, y = (as.numeric(Cause.Category.3 == 'SUMMERKILL' & !is.na(Cause.Category.2))))) +
+  geom_jitter(alpha = 0.5, height= 0.05) +
+  geom_smooth(method = 'glm', method.args = list(family = 'binomial')) +
+  xlab('Temperature') +
+  ylab('MME') +
+  theme_tufte()
+log_plot                   
+
+sample_mean_surf %>%
+  filter(MME == 0 | Cause.Category.3 == 'SUMMERKILL') %>%
+  filter(Month == 'Jun' | Month == 'Jul' | Month == 'Aug' | Month == 'Sep') %>%
+  group_by(MME) %>%
+  summarise(n())
+```
+
+
+# winterkill
+
+```{r}
+
+ice_data_sample <- mean_surf(sample_mean_surf) %>%
+  filter(is.na(Cause.Category.3) | Cause.Category.3 == 'WINTERKILL') %>%
+  filter(Month == 'Oct' | Month == 'Nov' | Month == 'Dec' | Month == 'Jan' | Month == 'Feb' | Month == 'Mar' | Month == 'Apr' | Month == 'May') %>%
+  group_by(WBIC, Year) %>%
+  summarise(ice = mean(ice_duration_days), n = n(), MME = ifelse(sum(MME == 1) >= 1, 1, 0)) 
+  
+
+ice_data <- mean_surf(bigdata_restricted) %>%
+  filter(is.na(Cause.Category.3) | Cause.Category.3 == 'WINTERKILL') %>%
+  filter(Month == 'Oct' | Month == 'Nov' | Month == 'Dec' | Month == 'Jan' | Month == 'Feb' | Month == 'Mar' | Month == 'Apr' | Month == 'May') %>%
+  group_by(Year, WBIC) %>%
+  summarise(ice = mean(ice_duration_days), n = n(), MME = ifelse(sum(MME == 1) >= 1, 1, 0)) 
+
+ggplot(ice_data_sample, aes(x = ice, y = as.numeric(MME))) +
+  geom_jitter(alpha = 0.5, height= 0.05) +
+  geom_smooth(method = 'glm', method.args = list(family = 'binomial')) +
+  ylab('MME') +
+  xlab('Ice Duration (Days)') +
+  theme_tufte()
+  
+
+logreg_winter_sample <- glm(MME ~ ice, family = 'binomial', data= ice_data_sample)
+summary(logreg_winter_sample)
+
+
+ggplot(ice_data, aes(x = ice, y = as.numeric(MME))) +
+  geom_jitter(alpha = 0.5, height= 0.05) +
+  geom_smooth(method = 'glm', method.args = list(family = 'binomial')) +
+  ylab('MME') +
+  xlab('Ice Duration (Days)') +
+  theme_tufte()
+  
+
+logreg_winter <- glm(MME ~ ice, family = 'binomial', data= ice_data)
+summary(logreg_winter)
+
+
+ggplot(filter(mean_surf(bigdata), Month == 'Jan' & MME == 0), aes(x = Year, y = ice_duration_days)) +
+  geom_jitter(alpha = 0.05) +
+  geom_smooth(method= 'lm') +
+  xlim(1981, 2015) +
+  ylab('Ice Duration (Days)') +
+  ylim(25, 200) +
+  theme_tufte()
+
+
+reg_winter <- lm(ice_duration_days ~ Year, data = filter(mean_surf(bigdata), Month == 'Jan' & MME == 0))
+summary(reg_winter)
+
+```
+
+
+
+
+# Regression Modeling
+
+
+```{r}
+
+
+Summer_data <- bigdata_spread %>%
+  filter(is.na(Cause.Category.3) | Cause.Category.3 == "SUMMERKILL") %>%
+  group_by(WBIC, site_id, Month, Year, peak_temp) %>%  
+  summarise(MME = max(as.numeric(MME))-1, Ice_Duration = mean(ice_duration_days, na.rm = TRUE), Schmidt = mean(schmidt_daily_annual_sum, na.rm = TRUE), Variance_After_Ice_30 = mean(coef_var_0.30, na.rm = TRUE), Variance_After_Ice_60 = mean(coef_var_30.60, na.rm = TRUE), Cumulative_Above_0 = mean(gdd_wtr_0c, na.rm = TRUE), Cumulative_Above_5 = mean(gdd_wtr_5c, na.rm = TRUE), Cumulative_Above_10 = mean(gdd_wtr_10c, na.rm = TRUE), Mean_Surf_Temp = max(mean_surf, na.rm = TRUE), Max_Surf_Temp = max(max_surf, na.rm = TRUE), Mean_Bot_Temp = max(mean_bot, na.rm = TRUE), Max_Bot_Temp = max(max_bot, na.rm = TRUE), Mean_Surf_Zscore = max(mean_surfZ, na.rm = TRUE), Max_Surf_Zscore = max(max_surfZ, na.rm = TRUE), Mean_Bot_Zscore = max(mean_botZ, na.rm = TRUE), Max_Bot_Zscore = max(max_botZ, na.rm = TRUE)) %>%
+  ungroup() 
+
+Summer_data$layer_dif <- Summer_data$Mean_Surf_Temp - Summer_data$Max_Bot_Temp
+Summer_data$qudratic_temp <- Summer_data$Mean_Surf_Temp^2
+
+
+Summer_data$Spring <- ifelse(Summer_data$Month == 'Mar' | Summer_data$Month == 'Apr' | Summer_data$Month == 'May', 1, 0)
+
+
+
+```
+
+```{r data subsets}
+
+set.seed(1234)
+
+train_indices <- sample(1:nrow(RF_data), size = 135102, replace = FALSE)
+train <- slice(RF_data, train_indices)
+test  <- slice(RF_data, -train_indices)
+
+
+```
+
+
+```{r oversampling BAD}
+
+#training_oversample <- SMOTE(as.factor(MME)~., data = test)
+set.seed(1234)
+
+sample_2000 <- merge(RF_data %>% filter(MME == 0) %>% sample_n(2000, replace=FALSE), RF_data %>% filter(MME ==1), all = TRUE)
+
+train_sample_2000 <- merge(train %>% filter(MME == 0) %>% sample_n(1000, replace=FALSE), train %>% filter(MME ==1), all = TRUE)
+
+
+```
+
+
+```{r missclassification function}
+
+get_misclass <- function(model) {
+  y <- predict(model, newdata = test, type = "response")
+  test <- test %>%
+    mutate(p_hat = y, pred_MME = p_hat > .5)
+  table(test$MME, test$pred_MME)
+  confusion_mat <- test %>%
+    group_by(MME, pred_MME) %>%
+    tally()
+  false_pos <- confusion_mat[2, 3]
+  false_neg <- confusion_mat[3, 3]
+  total_obs <- nrow(test)
+  misclassification <- (false_pos + false_neg)/total_obs
+  misclassification
+
+
+}
+```
+
+```{r regression exploration}
+m1 <- glm(MME ~ Mean_Surf_Temp + qudratic_temp + layer_dif + Mean_Surf_Zscore + Schmidt, family = 'binomial', data=train_sample_2000)
+summary(m1)
+get_misclass(m1)
+
+m2 <- glm(MME ~ Max_Surf_Zscore, family = 'binomial', data=train_sample_2000)
+summary(m2)
+get_misclass(m2)
+
+m3 <- glm(MME ~ Mean_Surf_Temp + Schmidt + layer_dif + Variance_After_Ice_30, family = 'binomial', data=train_sample_2000)
+summary(m3)
+get_misclass(m3)
+
+m4 <- glm(MME ~ Max_Surf_Temp + Mean_Surf_Temp + Max_Bot_Temp + Mean_Bot_Temp + Schmidt + peak_temp, family = 'binomial', data=train_sample_2000)
+summary(m4)
+get_misclass(m4)
+
+m5 <- glm(MME ~ Mean_Surf_Temp + layer_dif + Month, family = 'binomial', data=train)
+summary(m5)
+get_misclass(m5)
+
+m6 <- glm(MME ~ Mean_Surf_Temp + layer_dif, family = 'binomial', data=train_sample_2000)
+summary(m6)
+get_misclass(m6)
+
+```
+
+
+
+
+```{r}
+set.seed(1234)
+
+final_model <- glm(MME ~ Mean_Surf_Temp + layer_dif, family = 'binomial', data=RF_data) # data sample for predictions
+
+Reg_predictions <- na.omit(RF_future)
+Reg_predictions$Prob <- predict(final_model, na.omit(RF_future), type = 'response')
+Reg_predictions$MME <- ifelse(Reg_predictions$Prob > 0.5, 1, 0)
+Reg_predictions$super_risk <-ifelse(Reg_predictions$Prob > 0.9, 1, 0)
+Reg_predictions$low_chance <- ifelse(Reg_predictions$Prob > 0.05, 1, 0)
+```
+
+
+```{r regression}
+
+lm_year_MME_reg <- glm(MME_true ~ Year, family = 'binomial', data=Reg_predictions)
+
+
+summary(lm_year_MME_reg) 
+
+glm_RF_vs_GLM <- ggplot(Reg_predictions, aes(x = Year, y = MME_true)) +
+  geom_smooth(method = 'glm', method.args = list(family = 'binomial')) +
+  geom_smooth(method = 'glm', color = 'red', method.args = list(family = 'binomial'), data = RF_predictions, aes(x = Year, y = as.numeric(MME)-1))+
+  annotate('text', x = 2090, y = 0.0035, color = 'red', label = 'CF')+
+  annotate('text', x = 2090, y = 0.0025, color = 'blue', label = 'GLM')+
+  ylab('MME Probability')+
+  theme_tufte()
+
+
+```
+
+
+```{r}
+set.seed(1234)
+
+a <- Reg_predictions$Prob
+simulation_log_regress <- rbinom(length(a), 1, prob = a)
+
+Reg_predictions$MME_true <- simulation_log_regress
+
+```
+
+
+
+```{r}
+
+Reg_predictions %>%
+  group_by(Year, WBIC) %>%
+  filter(MME==1) %>%
+  ggplot(aes(x=as.factor(Year)))+
+    geom_bar() +
+    #geom_errorbar(aes(ymin = mean - se, ymax = mean + se), position = 'dodge') +
+    xlab('Year') +
+    ylab("Number of At Risk Lakes")+
+    #scale_y_continuous(limits=c(25,35),oob = rescale_none) +
+    coord_flip()+
+    theme_tufte()
+
+
+Reg_predictions %>%
+  group_by(Year, MME) %>%
+  summarise(mean = mean(peak_temp)) %>%
+  ggplot(aes(x=as.factor(Year), y = mean))+
+    geom_bar(stat='identity', position ="dodge") +
+    xlab('Year') +
+    ylab("Peak Temperature (Celsius)")+
+    scale_y_continuous(limits=c(27.5,37.5), oob = rescale_none) +
+    coord_flip() +
+    theme_tufte()
+
+
+```
+
+```{r}
+
+Reg_predictions$Season <- Reg_predictions$Month
+
+Reg_predictions$Season <- ifelse(Reg_predictions$Month =='Apr'| Reg_predictions$Month =='May', 'Spring', Reg_predictions$Season)
+
+Reg_predictions$Season <- ifelse(Reg_predictions$Month =='Mar'| Reg_predictions$Month =='Dec'| Reg_predictions$Month =='Jan'| Reg_predictions$Month =='Feb', 'Winter', Reg_predictions$Season)
+
+Reg_predictions$Season <- ifelse(Reg_predictions$Month =='Sep'|Reg_predictions$Month =='Jun'| Reg_predictions$Month =='Jul'| Reg_predictions$Month =='Aug', 'Summer', Reg_predictions$Season)
+
+Reg_predictions$Season <- ifelse(Reg_predictions$Month =='Oct'| Reg_predictions$Month =='Nov', 'Fall', Reg_predictions$Season)
+
+Reg_predictions$Season <-factor(Reg_predictions$Season, levels=c('Summer', 'Spring', 'Winter', 'Fall'))  
+```
+
+```{r}
+
+plot1<-Reg_predictions %>%
+  filter(MME_true == 1) %>%
+  filter(Year <2060) %>%
+ggplot(aes(x=factor(Year), fill=Season)) +
+  stat_count() + 
+  #geom_boxplot(color="black",aes(y=peak_temp, group=Year)) +
+  ylab("Forecasted MMEs")+
+  xlab("Period 1") +
+  scale_x_discrete()+
+  #guides(fill=FALSE) +
+  theme_tufte()+
+  ylim(0,70) +
+  theme(axis.text.x=element_text(angle=45,hjust=1), legend.position = 'left') 
+plot1
+
+
+
+plot2<-Reg_predictions %>%
+  filter(MME_true == 1) %>%
+  filter(Year >2060) %>%
+ggplot(aes(x=factor(Year), fill=Season)) +
+  stat_count()+
+  #geom_boxplot(color="black",aes(y=peak_temp, group=Year)) +
+  ylab(label = NULL)+
+  xlab("Period 2") +
+  scale_x_discrete()+
+  #guides(fill=FALSE) +
+  theme_tufte()+
+  theme(axis.text.x=element_text(angle=45,hjust=1), legend.position = 'right') + 
+  ylim(0,70) 
+plot2
+
+Reg_predictions %>%
+  filter(MME_true ==1) %>%
+ggplot(aes(x=Month)) +
+  stat_count()+
+  xlab("Month")+
+  ylab("")+
+  ggtitle("Number Of Events Per Month")+
+  scale_x_discrete() +
+  guides(fill=FALSE) +
+  
+  theme_tufte()
+
+
+
+grid.arrange(plot1,plot2, ncol = 2)
+
+```
+
+```{r}
+set.seed(1234)
+
+
+final_model <- glm(MME ~ Mean_Surf_Temp + layer_dif, family = 'binomial', data=Summer_data)
+
+Reg_summer_predictions <- na.omit(RF_future)
+Reg_summer_predictions$Prob <- predict(final_model, na.omit(RF_future), type = 'response')
+Reg_summer_predictions$MME <- ifelse(Reg_summer_predictions$Prob > 0.5, 1, 0)
+Reg_summer_predictions$low_chance <-ifelse(Reg_summer_predictions$Prob > 0.05, 1, 0)
+```
+
+```{r looking at just summerkills there is a greater number predicted}
+Reg_predictions %>% filter(low_chance == 1) %>% summarise(n())
+Reg_summer_predictions %>% filter(low_chance == 1) %>% summarise(n())
+
+```
+
+# Random Forest Modeling
+
+
+```{r}
+
+Access <- read_tsv('ACCESS_thermal_metrics.tsv')
+GFDL <- read_tsv('GFDL_thermal_metrics.tsv')
+```
+
+```{r uploading and transforming MME data}
+MME<-read.csv("Fish Kill Data Updated 3_7_2018 - Fish Kill Investigations Orgion.csv")
+MME <- MME %>%
+  filter(Min.Kill.Size!="Excludable") %>%
+  select(-contains('County'), -contains('Station.Name'), -contains('Cause.Desc'), -contains('Site.Seq.No'), -contains('Fishkill.Inv.Seq.No'), - contains('Location.QA.Comment'), -contains('Activity.Desc'), -contains('Recommended.Action.Desc'), -contains('Fish.Kill.Comment'), -contains('Live.Fish.Desc')) %>%
+  mutate(Month = Investigation.Start.Month) %>%
+  select(-contains('Investigation.Start.Month'))
+
+```
+
+
+```{r uploading TEMP/NHD data and transforming TEMP}
+TEMP<-read.csv("thermal_metrics.csv") #%>%
+    #select(-contains('ice_on_date'), -contains('ice_off_date'), -contains('gdd_wtr'), -contains('sthermo_depth_mean'), -contains('coef_'), -contains('strat')) 
+
+
+NHD_CONVERSION<-read.csv("NHD_WBIC.csv")
+
+TEMP<- merge(TEMP, NHD_CONVERSION) 
+```
+
+```{r tidying Temp data}
+TEMP_Tidy <- TEMP%>%
+  select(-contains('jas')) %>%
+  gather(key="type", value="temperature", starts_with('mean_surf_'),starts_with('mean_bot_'), starts_with('max_surf_'), starts_with('max_bot_')) %>%
+  separate(type, into=c('metric', 'depth', 'Month'), sep='_')
+  
+  
+TEMP_Tidy$Month <- str_to_title((TEMP_Tidy$Month)) 
+
+
+  
+
+```
+
+```{r tidying and converting for predictive data}
+Access <- merge(Access, NHD_CONVERSION)
+GFDL <- merge(GFDL, NHD_CONVERSION)
+
+Future <- Access%>%
+  select(-contains('jas')) %>%
+  gather(key="type", value="temperature", starts_with('mean_surf_'),starts_with('mean_bot_'), starts_with('max_surf_'), starts_with('max_bot_')) %>%
+  separate(type, into=c('metric', 'depth', 'Month'), sep='_')
+  
+  
+Future$Month <- str_to_title((Future$Month)) 
+
+
+
+FutureNOAA <- GFDL%>%
+  select(-contains('jas')) %>%
+  gather(key="type", value="temperature", starts_with('mean_surf_'),starts_with('mean_bot_'), starts_with('max_surf_'), starts_with('max_bot_')) %>%
+  separate(type, into=c('metric', 'depth', 'Month'), sep='_')
+
+FutureNOAA$Month <- str_to_title((Future$Month)) 
+```
+
+```{r uploading and transforming Wisconsin data and merging with TEMP}
+#filter for wisconsin only
+Wisconsin <- read.csv("Wi_Lakes_Maps .csv")
+Wisconsin <- select(Wisconsin, WBIC, OFFICIAL_NAME, OFFICIAL_SIZE_VALUE, OFFICIAL_MAX_DEPTH_VALUE)
+Wisconsin <- distinct(Wisconsin)
+
+TEMP_W <- merge(TEMP_Tidy, Wisconsin, all = FALSE) # 3072 sites less 
+```
+
+```{r}
+Future_W <- merge(Future,Wisconsin, all = FALSE)
+Future_W_NOAA <- merge(FutureNOAA,Wisconsin, all = FALSE) 
+```
+
+```{r creating fdata}
+
+fdata<-merge(MME,TEMP_Tidy, all = FALSE)# - 98 lakes
+fdata <- distinct(fdata)
+
+```
+
+
+```{r creation of bigdata and adding MME and Date}
+
+
+bigdata <-merge(fdata,TEMP_W, all = TRUE) # + 61 lakes from TEMP_W (so 61 w/ no temp data)
+bigdata$MME <-as.factor(ifelse(is.na(bigdata$Min.Kill.Size), 0, 1))
+bigdata$Date <- make_date(year=bigdata$Year, month = bigdata$Month)
+
+```
+
+```{r creating restricted bigdata}
+
+
+bigdata<- bigdata %>%
+  group_by(metric, depth, Month) %>%
+  mutate(zscore_temp = (temperature - ave(temperature, site_id))/ sd(temperature)) %>%
+  ungroup(metric, depth, Month)
+
+bigdata_restricted <-bigdata%>%
+  filter(Year>2003& Date < '2014-05-01')
+```
+
+```{r}
+
+Future_W <- Future_W %>%
+  group_by(metric, depth, Month) %>%
+  mutate(zscore_temp = (temperature - ave(temperature, site_id))/ sd(temperature)) %>%
+  ungroup(metric, depth, Month)
+
+Future_W <- Future_W %>% 
+  filter(year >= 2041)
+
+Future_W_NOAA <- Future_W_NOAA %>%
+  group_by(metric, depth, Month) %>%
+  mutate(zscore_temp = (temperature - ave(temperature, site_id))/ sd(temperature)) %>%
+  ungroup(metric, depth, Month)
+
+Future_W_NOAA <- Future_W_NOAA %>% 
+  filter(year >= 2041)
+
+```
+
+
+```{r functions for accessing bigdata and making zscore}
+
+mean_surf <- function(data) {
+  data %>%
+    filter(metric=='mean', depth=='surf')
+}
+mean_bot <- function(data) {
+  data %>%
+    filter(metric=='mean', depth=='bot')
+}
+max_surf <- function(data) {
+  data %>%
+    filter(metric=='max', depth=='surf')
+}
+max_bot <- function(data) {
+  data %>%
+    filter(metric=='max', depth=='bot')
+}
+```
+
+
+
+
+# Random Forest 
+```{r}
+rm(bigdata, fdata, fdata_restricted, MME, NHD_CONVERSION, TEMP, TEMP_Tidy, TEMP_W, Wisconsin, rf.1, Access, Future) 
+
+```
+
+```{r}
+
+bigdata_spread <- bigdata_restricted %>%
+  mutate(type = paste(bigdata_restricted$metric,'_', bigdata_restricted$depth, sep = '')) %>%
+  mutate(typeZ = paste(type, 'Z', sep = '')) %>%
+  select(-metric, -depth) %>%
+  distinct() %>%
+  spread(key = type, value = temperature) %>%
+  spread(key = typeZ, value = zscore_temp)
+
+
+```
+
+```{r}
+Future_spread <- Future_W %>%
+  mutate(type = paste(Future_W$metric,'_', Future_W$depth, sep = '')) %>%
+  mutate(typeZ = paste(type, 'Z', sep = '')) %>%
+  select(-metric, -depth) %>%
+  distinct() %>%
+  spread(key = type, value = temperature) %>%
+  spread(key = typeZ, value = zscore_temp)
+
+
+```
+
+
+```{r}
+Future_spread_NOAA <- Future_W_NOAA %>%
+  mutate(type = paste(Future_W_NOAA$metric,'_', Future_W_NOAA$depth, sep = '')) %>%
+  mutate(typeZ = paste(type, 'Z', sep = '')) %>%
+  select(-metric, -depth) %>%
+  distinct() %>%
+  spread(key = type, value = temperature) %>%
+  spread(key = typeZ, value = zscore_temp)
+
+
+
+```
+
+
+```{r}
+
+
+RF_data <- bigdata_spread %>%
+  group_by(WBIC, site_id, Month, Year, peak_temp) %>% #add cause.category.3 
+  summarise(MME = max(as.numeric(MME))-1, Ice_Duration = mean(ice_duration_days, na.rm = TRUE), Schmidt = mean(schmidt_daily_annual_sum, na.rm = TRUE), Variance_After_Ice_30 = mean(coef_var_0.30, na.rm = TRUE), Variance_After_Ice_60 = mean(coef_var_30.60, na.rm = TRUE), Cumulative_Above_0 = mean(gdd_wtr_0c, na.rm = TRUE), Cumulative_Above_5 = mean(gdd_wtr_5c, na.rm = TRUE), Cumulative_Above_10 = mean(gdd_wtr_10c, na.rm = TRUE), Mean_Surf_Temp = max(mean_surf, na.rm = TRUE), Max_Surf_Temp = max(max_surf, na.rm = TRUE), Mean_Bot_Temp = max(mean_bot, na.rm = TRUE), Max_Bot_Temp = max(max_bot, na.rm = TRUE), Mean_Surf_Zscore = max(mean_surfZ, na.rm = TRUE), Max_Surf_Zscore = max(max_surfZ, na.rm = TRUE), Mean_Bot_Zscore = max(mean_botZ, na.rm = TRUE), Max_Bot_Zscore = max(max_botZ, na.rm = TRUE)) %>%
+  ungroup() 
+
+RF_data$layer_dif <- RF_data$Mean_Surf_Temp - RF_data$Max_Bot_Temp
+RF_data$qudratic_temp <- RF_data$Mean_Surf_Temp^2
+
+
+RF_data$Spring <- ifelse(RF_data$Month == 'Mar' | RF_data$Month == 'Apr' | RF_data$Month == 'May', 1, 0)
+
+#RF_data$Cause.Category.3 <- ifelse(is.na(RF_data$Cause.Category.3), 0, 1)
+
+```
+
+
+```{r}
+
+Future_spread$Year <- Future_spread$year
+
+RF_future <- Future_spread %>%
+  group_by(WBIC, site_id, Month, Year, peak_temp) %>%
+  summarise(MME = 0, Ice_Duration = mean(ice_duration_days, na.rm = TRUE), Schmidt = mean(schmidt_daily_annual_sum, na.rm = TRUE), Variance_After_Ice_30 = mean(coef_var_0.30, na.rm = TRUE), Variance_After_Ice_60 = mean(coef_var_30.60, na.rm = TRUE), Cumulative_Above_0 = mean(gdd_wtr_0c, na.rm = TRUE), Cumulative_Above_5 = mean(gdd_wtr_5c, na.rm = TRUE), Cumulative_Above_10 = mean(gdd_wtr_10c, na.rm = TRUE), Mean_Surf_Temp = max(mean_surf, na.rm = TRUE), Max_Surf_Temp = max(max_surf, na.rm = TRUE), Mean_Bot_Temp = max(mean_bot, na.rm = TRUE), Max_Bot_Temp = max(max_bot, na.rm = TRUE), Mean_Surf_Zscore = max(mean_surfZ, na.rm = TRUE), Max_Surf_Zscore = max(max_surfZ, na.rm = TRUE), Mean_Bot_Zscore = max(mean_botZ, na.rm = TRUE), Max_Bot_Zscore = max(max_botZ, na.rm = TRUE)) %>%
+  ungroup() 
+
+RF_future$layer_dif <- RF_future$Mean_Surf_Temp - RF_future$Max_Bot_Temp
+
+RF_future$qudratic_temp <- RF_future$Mean_Surf_Temp^2
+
+RF_future$Spring <- ifelse(RF_future$Month == 'Mar' | RF_future$Month == 'Apr' | RF_future$Month == 'May', 1, 0)
+
+
+```
+
+
+```{r}
+
+Future_spread_NOAA$Year <- Future_spread_NOAA$year
+
+RF_future_NOAA <- Future_spread_NOAA %>%
+  group_by(WBIC, site_id, Month, Year, peak_temp) %>%
+  summarise(MME = 0, Ice_Duration = mean(ice_duration_days, na.rm = TRUE), Schmidt = mean(schmidt_daily_annual_sum, na.rm = TRUE), Variance_After_Ice_30 = mean(coef_var_0.30, na.rm = TRUE), Variance_After_Ice_60 = mean(coef_var_30.60, na.rm = TRUE), Cumulative_Above_0 = mean(gdd_wtr_0c, na.rm = TRUE), Cumulative_Above_5 = mean(gdd_wtr_5c, na.rm = TRUE), Cumulative_Above_10 = mean(gdd_wtr_10c, na.rm = TRUE), Mean_Surf_Temp = max(mean_surf, na.rm = TRUE), Max_Surf_Temp = max(max_surf, na.rm = TRUE), Mean_Bot_Temp = max(mean_bot, na.rm = TRUE), Max_Bot_Temp = max(max_bot, na.rm = TRUE), Mean_Surf_Zscore = max(mean_surfZ, na.rm = TRUE), Max_Surf_Zscore = max(max_surfZ, na.rm = TRUE), Mean_Bot_Zscore = max(mean_botZ, na.rm = TRUE), Max_Bot_Zscore = max(max_botZ, na.rm = TRUE)) %>%
+  ungroup() 
+
+RF_future_NOAA$layer_dif <- RF_future_NOAA$Mean_Surf_Temp - RF_future_NOAA$Max_Bot_Temp
+
+RF_future_NOAA$qudratic_temp <- RF_future_NOAA$Mean_Surf_Temp^2
+
+RF_future_NOAA$Spring <- ifelse(RF_future_NOAA$Month == 'Mar' | RF_future_NOAA$Month == 'Apr' | RF_future_NOAA$Month == 'May', 1, 0)
+
+
+
+
+
+
+```
+
+
+```{r}
+
+year_data <- RF_data %>%
+  group_by(Year, WBIC, peak_temp) %>%
+  summarise(Mean_Surf_Temp = mean(Mean_Surf_Temp),Mean_Bot_Temp = mean(Mean_Bot_Temp),MME = max(as.numeric(MME)), Ice_Duration = mean(Ice_Duration, na.rm = TRUE), Schmidt = mean(Schmidt, na.rm = TRUE), Variance_After_Ice_30 = mean(Variance_After_Ice_30, na.rm = TRUE), Variance_After_Ice_60 = mean(Variance_After_Ice_60, na.rm = TRUE), Cumulative_Above_0 = mean(Cumulative_Above_0, na.rm = TRUE), Cumulative_Above_5 = mean(Cumulative_Above_5, na.rm = TRUE), Cumulative_Above_10 = mean(Cumulative_Above_10, na.rm = TRUE), Mean_Surf_Zscore = mean(Mean_Surf_Zscore, na.rm = TRUE), Max_Surf_Zscore = mean(Max_Surf_Zscore, na.rm = TRUE), Mean_Bot_Zscore = mean(Mean_Surf_Zscore, na.rm = TRUE), Max_Bot_Zscore = mean(Mean_Bot_Zscore, na.rm = TRUE)) %>%
+  ungroup()
+
+```
+
+```{r}
+
+rf.train.all.variables <- RF_data[c('Mean_Surf_Temp', 'Max_Surf_Temp', 'Mean_Bot_Temp', 'Max_Bot_Temp', 'Mean_Surf_Zscore', 'Max_Surf_Zscore', 'Mean_Bot_Zscore', 'Max_Bot_Zscore', 'Schmidt',  'Variance_After_Ice_30', 'Variance_After_Ice_60',  'Cumulative_Above_5', 'Cumulative_Above_10', 'WBIC', 'Cumulative_Above_0','Ice_Duration','Month')]
+
+set.seed(1234)
+rf.all.summer <- randomForest(x=rf.train.all.variables, y=as.factor(RF_data$Cause.Category.3), importance = TRUE,ntree = 100)
+
+                       
+#rf.all <- randomForest(x=rf.train.all.variables, y=as.factor(RF_data$MME), importance = TRUE,ntree = 100)
+
+#rf.all.sample <- randomForest(x=rf.train.all.variables, y=as.factor(RF_data$MME), importance = TRUE,ntree = 1000, sampsize = c(426,426))
+```
+
+
+```{r}
+
+rf.train.gini.wbic <- RF_data[c('Mean_Surf_Temp', 'Max_Surf_Temp', 'Mean_Bot_Temp', 'Max_Bot_Temp', 'Mean_Surf_Zscore', 'Max_Surf_Zscore', 'Mean_Bot_Zscore', 'Max_Bot_Zscore', 'Schmidt',  'Variance_After_Ice_30', 'Variance_After_Ice_60',  'Cumulative_Above_5', 'Cumulative_Above_10')]
+
+# Excluded - 'Stratification_Duration', 'Cumulative_Above_0','Ice_Duration', 'Depth','Month','Year','WBIC'
+
+set.seed(1234)
+rf.gini.wbic <- randomForest(x=rf.train.gini.wbic, y=as.factor(RF_data$MME), importance = TRUE,ntree = 100)
+```
+
+
+
+```{r}
+
+rf.train.mean.surf <- RF_data[c('Mean_Surf_Temp', 'Month')]
+
+set.seed(1234)
+rf.mean.surf <- randomForest(x=rf.train.mean.surf, y=as.factor(RF_data$MME), importance = TRUE,ntree = 100, c(426,426))
+
+```
+
+
+```{r}
+
+rf.train.non.colinear <- (RF_data)[c('Variance_After_Ice_30', 'Ice_Duration', 'Schmidt', 'Cumulative_Above_0', 'WBIC', 'peak_temp')]
+
+set.seed(1234)
+#rf.non.colinear <- randomForest(x=rf.train.non.colinear, y=as.factor(RF_data$MME), importance = TRUE, sampsize = c(424,424))
+
+set.seed(1234)
+rf.non.colinear.full <- randomForest(x=rf.train.non.colinear, y=as.factor(RF_data$MME), importance = TRUE)
+```
+
+
+```{r}
+
+rf.train.by.month <- (RF_data)[c('Mean_Surf_Temp', 'Mean_Surf_Zscore', 'layer_dif')]
+
+set.seed(1234)
+#rf.by.month <- randomForest(x=rf.train.by.month, y=as.factor(RF_data$MME), importance = TRUE, sampsize = c(424,424))
+
+rf.by.month.full <- randomForest(x=rf.train.by.month, y=as.factor(RF_data$MME), importance = TRUE, ntree = 500)
+```
+
+```{r}
+
+rf.train.accurate <- (RF_data)[c('Max_Surf_Temp', 'Schmidt')]
+
+set.seed(1234)
+rf.accurate <- randomForest(x=rf.train.accurate, y=as.factor(RF_data$MME), importance = TRUE, ntree =500)
+
+
+```
+
+```{r}
+
+rf.train.ultimate <- RF_data[c('Mean_Surf_Temp', 'Max_Surf_Temp', 'Mean_Bot_Temp', 'Max_Bot_Temp', 'Mean_Surf_Zscore', 'Max_Surf_Zscore', 'Mean_Bot_Zscore', 'Max_Bot_Zscore', 'Schmidt',  'Variance_After_Ice_30', 'Variance_After_Ice_60',  'Cumulative_Above_5', 'Cumulative_Above_10', 'Cumulative_Above_0','Ice_Duration','Month')]
+
+set.seed(1234)
+
+
+rf.ultimate <- randomForest(x=rf.train.ultimate, y=as.factor(RF_data$MME), importance = TRUE,ntree = 1000, mtry = 2)
+
+rf.ultimate.sample <- randomForest(x=rf.train.ultimate, y=as.factor(RF_data$MME), importance = TRUE,ntree = 1000, mtry = 2, sampsize = c(424,424))
+
+```
+
+
+```{r}
+rf.max.surf.Z <- RF_data[c('Max_Surf_Zscore')]
+
+set.seed(1234)
+rf.max.surf.Z <- randomForest(x=rf.max.surf.Z, y=as.factor(RF_data$MME), importance = TRUE,ntree = 500)
+
+```
+
+
+```{r}
+rf.train.year <- year_data[c('Mean_Surf_Temp', 'Schmidt', 'Ice_Duration', 'Cumulative_Above_0','Variance_After_Ice_30')]
+
+set.seed(1234)
+rf.year<- randomForest(x=rf.train.year, y=as.factor(year_data$MME), importance = TRUE,ntree = 500)
+
+```
+
+
+```{r}
+
+#rf.train.conservative <- RF_data[c('Mean_Surf_Temp', "layer_dif", 'Mean_Surf_Zscore', 'Schmidt', 'peak_temp')]
+rf.train.conservative <- train[c('Mean_Surf_Temp', "layer_dif", 'Mean_Surf_Zscore', 'Schmidt', 'peak_temp')]
+
+#rf.train.conservative <- train[c('Mean_Surf_Temp', "layer_dif", 'Mean_Surf_Zscore', 'Schmidt', 'peak_temp')]
+
+set.seed(1234)
+#rf.conservative.samp <- randomForest(x=rf.train.conservative, y=as.factor(RF_data$MME), importance = TRUE,ntree = 1000, mtry = 2,  sampsize = c(424,424))
+
+
+#rf.conservative <- randomForest(x=rf.train.conservative, y=as.factor(RF_data$MME), importance = TRUE,ntree = 500, mtry = 2)
+
+#rf.conservative.summer <- randomForest(x=rf.train.conservative, y=as.factor(Summer_data$MME), importance = TRUE,ntree = 500, mtry = 2)
+
+
+rf.conservative.train <- randomForest(x=rf.train.conservative, y=as.factor(test$MME), importance = TRUE,ntree = 500, mtry = 2)
+```
+
+
+
+```{r}
+
+rf.train.super.conservative <- RF_data[c('Mean_Surf_Temp')] #data = train for the training model
+
+rf.train.super.conservative.summer <- Summer_data[c('Mean_Surf_Temp')] 
+
+set.seed(1234)
+#rf.super.conservative <- randomForest(x=rf.train.super.conservative, y=as.factor(RF_data$MME), importance = TRUE,ntree = 500)
+
+#rf.super.conservative.train <- randomForest(x=rf.train.super.conservative, y=as.factor(test$MME), importance = TRUE,ntree = 500)
+
+rf.super.conservative.train.summer <- randomForest(x=rf.train.super.conservative.summer, y=as.factor(Summer_data$MME), importance = TRUE,ntree = 500)
+
+#rf.max.surf.sample <- randomForest(x=rf.max.surf, y=as.factor(RF_data$MME), importance = TRUE, ntree = 500, sampsize =c(424,424))
+```
+  
+  
+
+```{r  RF prediction future}
+
+set.seed(1234)
+#table(predict(rf.conservative.summer,na.omit(RF_data)))
+
+#table(predict(rf.super.conservative,na.omit(RF_future_NOAA)))
+
+#table(predict(rf.super.conservative.train.summer,na.omit(RF_future)))
+
+#table(predict(rf.accurate,na.omit(RF_future)))
+
+
+
+```
+
+
+levels of factors sapply(data, class)
+
+kfold cross validation
+
+penalized logistic regression (minimizes RSS + shrinkage penalty for standardized betas) - lasso for logistic
+
+set replace == false on random forest
+
+```{r}
+
+set.seed(1234)
+
+RF_predictions <- na.omit(RF_future)
+RF_predictions$MME <- predict(rf.super.conservative, na.omit(RF_future))
+```
+
+```{r regression}
+glm_year_MME_rf <- glm((MME) ~ Year, family = 'binomial', data=RF_predictions)
+
+
+summary(glm_year_MME_rf) 
+```
+
+
+```{r}
+
+RF_predictions$Month = factor(RF_predictions$Month, levels=c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep","Oct", "Nov", "Dec"))  
+
+
+plot1<-RF_predictions %>%
+  filter(MME == 1) %>%
+ggplot(aes(x=factor(Year), fill= Month)) +
+  stat_count()+
+  #geom_boxplot(color="black",aes(y=peak_temp, group=Year)) +
+  ylab("Number of At Risk Lakes")+
+  xlab("Year") +
+  scale_x_discrete()+
+  #guides(fill=FALSE) +
+  coord_flip() +
+  theme_tufte()
+plot1
+
+
+RF_predictions %>%
+  filter(MME ==1) %>%
+ggplot(aes(x=Month)) +
+  stat_count()+
+  xlab("Month")+
+  ylab("")+
+  ggtitle("Number Of Events Per Month")+
+  scale_x_discrete() +
+  guides(fill=FALSE) +
+  theme_tufte()
+
+
+
+
+
+```
+
+
+
+
+
+
+```{r}
+
+RF_predictions$Season <- RF_predictions$Month
+
+RF_predictions$Season <- ifelse(RF_predictions$Month =='Apr'| RF_predictions$Month =='May', 'Spring', RF_predictions$Season)
+
+RF_predictions$Season <- ifelse(RF_predictions$Month =='Mar'| RF_predictions$Month =='Dec'| RF_predictions$Month =='Jan'| RF_predictions$Month =='Feb', 'Winter', RF_predictions$Season)
+
+RF_predictions$Season <- ifelse(RF_predictions$Month =='Sep'|RF_predictions$Month =='Jun'| RF_predictions$Month =='Jul'| RF_predictions$Month =='Aug', 'Summer', RF_predictions$Season)
+
+RF_predictions$Season <- ifelse(RF_predictions$Month =='Oct'| RF_predictions$Month =='Nov', 'Fall', RF_predictions$Season)
+
+RF_predictions$Season <-factor(RF_predictions$Season, levels=c('Summer', 'Spring', 'Winter', 'Fall'))  
+```
+
+```{r}
+
+plot1<-RF_predictions %>%
+  filter(MME == 1) %>%
+  filter(Year <2060) %>%
+ggplot(aes(x=factor(Year), fill=Season)) +
+  stat_count()+
+  #geom_boxplot(color="black",aes(y=peak_temp, group=Year)) +
+  ylab("Forecasted MMEs")+
+  xlab("Period 1") +
+  scale_x_discrete()+
+  #guides(fill=FALSE) +
+  theme_tufte()+
+  ylim(0,120) +
+  theme(axis.text.x=element_text(angle=45,hjust=1), legend.position = 'left') 
+plot1
+
+
+
+plot2<-RF_predictions %>%
+  filter(MME == 1) %>%
+  filter(Year >2060) %>%
+ggplot(aes(x=factor(Year), fill=Season)) +
+  stat_count()+
+  #geom_boxplot(color="black",aes(y=peak_temp, group=Year)) +
+  ylab(label = NULL)+
+  xlab("Period 2") +
+  scale_x_discrete()+
+  #guides(fill=FALSE) +
+  theme_tufte()+
+  theme(axis.text.x=element_text(angle=45,hjust=1), legend.position = 'right') +
+  ylim(0,120) 
+plot2
+
+RF_predictions %>%
+  filter(MME ==1) %>%
+ggplot(aes(x=Month)) +
+  stat_count()+
+  xlab("Month")+
+  ylab("")+
+  ggtitle("Number Of Events Per Month")+
+  scale_x_discrete() +
+  guides(fill=FALSE) +
+  
+  theme_tufte()
+
+
+
+grid.arrange(plot1,plot2, ncol = 2)
+
+```
+
+
+
+```{r}
+
+
+RF_predictions$temp_step <- cut(RF_predictions$Mean_Surf_Temp, c(- 2, 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24,26, 28, 30, 32, 34, 36, 38))
+
+
+Reg_predictions$temp_step <- cut(Reg_predictions$Mean_Surf_Temp, c(-6, -4, - 2, 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24,26, 28, 30, 32, 34, 36, 38, 40))
+
+CF <- RF_predictions %>%
+  group_by(temp_step) %>%
+  summarise(prop_pred = (sum(MME == 1)/sum(MME == 0)))%>%
+  filter(!is.na(temp_step)) %>%
+ggplot(aes(x = temp_step, y = prop_pred)) +
+  geom_point() + 
+  ylab('Proportion MMEs') +
+  xlab('Mean Surface Temperature in Increments')+ 
+  #theme_tufte() +
+  ggtitle('CF') +
+  theme(axis.text.x=element_text(angle=45,hjust=1)) 
+   
+options(scipen = -999)
+
+GLM <- Reg_predictions %>%
+  group_by(temp_step) %>%
+  summarise(avg_prob = mean(Prob)) %>%
+ggplot(aes(x = temp_step, y = avg_prob)) +
+  geom_point() + 
+  ylab('Probability of MME') +
+  xlab('Mean Surface Temperature in Increments')+ 
+  #theme_tufte() +
+  ggtitle('GLM') +
+  theme(axis.text.x=element_text(angle=45,hjust=1))    
+
+
+grid.arrange(GLM, CF)
+
+```
+
+
+
